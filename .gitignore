@@ -28,3 +28,6 @@ gradle.properties
 /app/build.gradle.kts
 /build.gradle.kts
 /gradle/libs.versions.toml
+
+# captcha ocr
+/captcha
