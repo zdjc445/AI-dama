@@ -35,3 +35,4 @@ gradle.properties
 /captcha/*.jpg
 /captcha/*.png
 /captcha/ocr_project/result.json
+/captcha/.env
