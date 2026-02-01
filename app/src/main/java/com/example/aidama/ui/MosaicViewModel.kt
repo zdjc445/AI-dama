@@ -253,11 +253,39 @@ class MosaicViewModel : ViewModel() {
         state = state.copy(images = state.images + uris)
         viewModelScope.launch {
             uris.forEachIndexed { i, uri ->
-                val key = MosaicUtils.getFileNameKey(context, uri)
-                MosaicUtils.loadJsonFromAssets(context, "${key}_ai.json")?.let { json ->
-                    val data = MosaicUtils.parseOcrJson(json)
-                    ocrCacheMap[uri] = Pair(data.first, data.second)
-                    postAiAnalysisToChat(start + i, data.first)
+                try {
+                    // 尝试本地OCR
+                    val json = MosaicUtils.runLocalOcr(context, uri)
+                    
+                    if (json != null) {
+                        // 本地OCR成功
+                        val data = MosaicUtils.parseOcrJson(json)
+                        ocrCacheMap[uri] = Pair(data.first, data.second)
+                        postAiAnalysisToChat(start + i, data.first)
+                        android.util.Log.d("MosaicViewModel", "Local OCR succeeded for image ${i + 1}")
+                    } else {
+                        // 本地OCR失败，回退到assets中的预生成JSON
+                        android.util.Log.w("MosaicViewModel", "Local OCR failed, falling back to assets for image ${i + 1}")
+                        val key = MosaicUtils.getFileNameKey(context, uri)
+                        MosaicUtils.loadJsonFromAssets(context, "${key}_ai.json")?.let { assetJson ->
+                            val data = MosaicUtils.parseOcrJson(assetJson)
+                            ocrCacheMap[uri] = Pair(data.first, data.second)
+                            postAiAnalysisToChat(start + i, data.first)
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("MosaicViewModel", "Error processing image ${i + 1}: ${e.message}", e)
+                    // 发生异常时也尝试回退到assets
+                    try {
+                        val key = MosaicUtils.getFileNameKey(context, uri)
+                        MosaicUtils.loadJsonFromAssets(context, "${key}_ai.json")?.let { assetJson ->
+                            val data = MosaicUtils.parseOcrJson(assetJson)
+                            ocrCacheMap[uri] = Pair(data.first, data.second)
+                            postAiAnalysisToChat(start + i, data.first)
+                        }
+                    } catch (fallbackEx: Exception) {
+                        android.util.Log.e("MosaicViewModel", "Fallback also failed: ${fallbackEx.message}", fallbackEx)
+                    }
                 }
             }
             selectImage(start + uris.size - 1)

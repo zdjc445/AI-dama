@@ -15,6 +15,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.IntSize
 import org.json.JSONObject
 import java.io.IOException
+import java.io.File
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 object MosaicUtils {
     private val ColorPalette = listOf(
@@ -62,6 +67,88 @@ object MosaicUtils {
 
     fun loadJsonFromAssets(context: Context, fileName: String): String? {
         return try { context.assets.open(fileName).bufferedReader().use { it.readText() } } catch (ex: IOException) { null }
+    }
+
+    /**
+     * 调用本地OCR工具处理图片
+     * @param context Android Context
+     * @param imageUri 图片URI
+     * @return OCR结果JSON字符串，失败返回null
+     */
+    suspend fun runLocalOcr(context: Context, imageUri: Uri): String? = withContext(Dispatchers.IO) {
+        try {
+            // 1. 将图片复制到临时文件（captcha工具需要访问）
+            val inputStream = context.contentResolver.openInputStream(imageUri) ?: return@withContext null
+            val tempImageFile = File(context.cacheDir, "temp_ocr_${System.currentTimeMillis()}.jpg")
+            tempImageFile.outputStream().use { output ->
+                inputStream.copyTo(output)
+            }
+            inputStream.close()
+
+            // 2. 构建Python命令
+            val captchaPath = "F:\\AutoMark\\AI-dama\\captcha"
+            val pythonExe = "$captchaPath\\.venv\\Scripts\\python.exe"
+            val scriptPath = "$captchaPath\\ocr_project\\run_ocr.py"
+            val resultPath = "$captchaPath\\ocr_project\\result.json"
+
+            // 验证文件存在
+            if (!File(pythonExe).exists()) {
+                android.util.Log.e("MosaicUtils", "Python executable not found: $pythonExe")
+                return@withContext null
+            }
+            if (!File(scriptPath).exists()) {
+                android.util.Log.e("MosaicUtils", "OCR script not found: $scriptPath")
+                return@withContext null
+            }
+
+            // 3. 执行Python脚本（通过命令行参数传递图片路径）
+            val processBuilder = ProcessBuilder(
+                pythonExe, 
+                scriptPath,
+                "--image", tempImageFile.absolutePath
+            )
+            processBuilder.directory(File(captchaPath))
+            processBuilder.redirectErrorStream(true)
+
+            val process = processBuilder.start()
+            
+            // 读取输出（用于调试）
+            val output = StringBuilder()
+            BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    output.append(line).append("\n")
+                    android.util.Log.d("OCR_OUTPUT", line ?: "")
+                }
+            }
+
+            // 等待进程完成（超时30秒）
+            val exitCode = process.waitFor()
+            
+            // 清理临时文件
+            tempImageFile.delete()
+
+            if (exitCode != 0) {
+                android.util.Log.e("MosaicUtils", "OCR process failed with exit code: $exitCode")
+                android.util.Log.e("MosaicUtils", "Output: $output")
+                return@withContext null
+            }
+
+            // 4. 读取result.json
+            val resultFile = File(resultPath)
+            if (!resultFile.exists()) {
+                android.util.Log.e("MosaicUtils", "Result file not found: $resultPath")
+                return@withContext null
+            }
+
+            val jsonResult = resultFile.readText()
+            android.util.Log.d("MosaicUtils", "OCR completed successfully")
+            jsonResult
+
+        } catch (e: Exception) {
+            android.util.Log.e("MosaicUtils", "OCR error: ${e.message}", e)
+            null
+        }
     }
 
     fun parseOcrJson(jsonString: String): Pair<List<OcrRect>, IntSize> {
